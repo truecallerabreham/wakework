@@ -30,6 +30,7 @@ export class AlarmSession {
     this.state = STATES.SCHEDULED;
     this.mode = null;
     this.target = '';
+    this.alarmAt = null;
     this.startedAt = null;
     this.validatedMs = 0;
     this.phoneMs = 0;
@@ -39,11 +40,35 @@ export class AlarmSession {
     this.reason = null;
   }
 
-  schedule(target) {
+  schedule(target, alarmAt = null) {
     if (!target?.trim()) throw new Error('A work target is required');
     this.reset();
     this.target = target.trim();
+    this.alarmAt = alarmAt;
     this.state = STATES.SCHEDULED;
+    return this.snapshot();
+  }
+
+  checkAlarm() {
+    const now = this.now();
+    if (this.state === STATES.SCHEDULED && this.alarmAt && now >= this.alarmAt) return this.ring();
+    if (this.state === STATES.RE_ALARM && this.nextAlarmAt && now >= this.nextAlarmAt) return this.ring();
+    return this.snapshot();
+  }
+
+  resume(laptopOnline = true) {
+    if (this.state !== STATES.RE_ALARM) return this.snapshot();
+    this.reason = null;
+    this.nextAlarmAt = null;
+    this.lastTick = this.now();
+    if (laptopOnline) {
+      this.state = STATES.MONITORING;
+      this.mode = this.phoneMs > 0 ? MODES.MIXED : MODES.LAPTOP;
+    } else {
+      this.state = STATES.WAITING_FOR_LAPTOP;
+      this.startedAt = this.now();
+      if (this.phoneMs > 0) this.mode = MODES.MIXED;
+    }
     return this.snapshot();
   }
 
@@ -120,6 +145,11 @@ export class AlarmSession {
       state: this.state,
       mode: this.mode,
       target: this.target,
+      alarmAt: this.alarmAt,
+      waitingSecondsLeft:
+        this.state === STATES.WAITING_FOR_LAPTOP && this.startedAt
+          ? Math.max(0, Math.ceil((RECOVERY_WINDOW - (this.now() - this.startedAt)) / 1000))
+          : null,
       validatedMinutes: Math.floor(this.validatedMs / 60000),
       phoneMinutes: Math.floor(this.phoneMs / 60000),
       totalMinutes: Math.floor(this.totalCreditMs() / 60000),
