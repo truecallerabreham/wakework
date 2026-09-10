@@ -1,18 +1,161 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wakework</title><link rel="stylesheet" href="/style.css"></head>
-<body><main class="phone-shell">
-  <header><span class="eyebrow">OFFLINE ACCOUNTABILITY</span><h1>Wakework</h1><p class="muted">Wake up. Pick one thing. Stay with it.</p></header>
-  <section class="card setup"><label for="target">Morning work target</label><input id="target" placeholder="e.g. finish the project brief"><button id="save">Set alarm</button><p id="connection" class="status">Connecting to local network...</p></section>
-  <section class="card session hidden" id="session"><div class="session-top"><span id="state">Scheduled</span><span id="mode"></span></div><h2 id="headline">Your morning is queued.</h2><p id="detail" class="muted"></p><div class="progress"><i id="progress"></i></div><div class="minutes"><strong id="minutes">0</strong><span>/ 30 validated minutes</span></div><div class="actions"><button id="ring">Simulate alarm</button><button id="dismiss" class="secondary">Dismiss</button><button id="end" class="quiet">End session</button></div></section>
-  <p class="footnote">Laptop agent: <a href="/agent">open monitoring screen</a></p>
-</main><script>
-const ws = new WebSocket(`ws://${location.host}`); const $ = id => document.getElementById(id); let current;
-const send = (type, extra={}) => ws.send(JSON.stringify({type, ...extra}));
-ws.onopen = () => $('connection').textContent = 'Local connection ready';
-ws.onclose = () => $('connection').textContent = 'Local connection lost';
-ws.onmessage = event => { const data=JSON.parse(event.data); if(data.type!=='state') return; current=data; render(); };
-$('save').onclick=()=>send('schedule',{target:$('target').value}); $('ring').onclick=()=>send('ring'); $('dismiss').onclick=()=>send('dismiss'); $('end').onclick=()=>send('end');
-function render(){ const s=current.state; if(current.state.target){$('session').classList.remove('hidden');$('target').disabled=true;} $('state').textContent=s.state.replaceAll('-',' '); $('mode').textContent=s.mode||''; $('minutes').textContent=s.totalMinutes; $('progress').style.width=`${Math.min(100,current.state.totalMinutes/30*100)}%`; $('detail').textContent=current.laptopOnline?'Laptop agent connected locally':'Laptop unavailable; fallback starts after 10 minutes'; $('headline').textContent=s.state==='complete'?'Session complete.':s.state==='re-alarm'?'Time to come back.':s.state==='phone-fallback'?'Phone-only focus is active.':'Stay with your target.'; }
-setInterval(()=>{if(current) send('tick',{working:current.state.state==='monitoring'});},60000);
-</script></body></html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wakework</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main class="phone-shell">
+  <header>
+    <span class="eyebrow">OFFLINE ACCOUNTABILITY</span>
+    <h1>Wakework</h1>
+    <p class="muted">Set the alarm. Sleep. Wake up and work 30 real minutes.</p>
+  </header>
+
+  <section class="card setup">
+    <label for="time">Alarm time</label>
+    <input type="time" id="time" value="06:30">
+    <label for="target">Morning work target</label>
+    <input id="target" placeholder="e.g. finish the project brief">
+    <button id="save">Set alarm</button>
+    <p id="alarmInfo" class="status">No alarm set yet.</p>
+  </section>
+
+  <section class="card connect">
+    <div class="session-top"><span>LAPTOP AGENT</span><span id="laptopStatus">offline</span></div>
+    <p class="muted">On your laptop, open this page once and leave the tab open:</p>
+    <p class="agent-url" id="agentUrl">checking...</p>
+    <p class="status" id="connectNote">Both devices must share the same Wi-Fi or hotspot.</p>
+  </section>
+
+  <section class="card session hidden" id="session">
+    <div class="session-top"><span id="state">Scheduled</span><span id="mode"></span></div>
+    <h2 id="headline">Your morning is queued.</h2>
+    <p id="detail" class="muted"></p>
+    <div class="progress"><i id="progress"></i></div>
+    <div class="minutes"><strong id="minutes">0</strong><span>/ 30 validated minutes</span></div>
+    <div class="actions">
+      <button id="back" class="secondary hidden">I'm back at the laptop</button>
+      <button id="end" class="quiet">End session</button>
+    </div>
+  </section>
+</main>
+
+<div id="alarmOverlay" class="alarm-overlay">
+  <p class="eyebrow">WAKE UP</p>
+  <h1>Time to work</h1>
+  <p id="alarmTarget" class="muted"></p>
+  <button id="dismiss" class="big">I'm up — start my session</button>
+</div>
+
+<script>
+const ws = new WebSocket(`ws://${location.host}`);
+const $ = id => document.getElementById(id);
+let current, audio, beepTimer, vibTimer;
+
+const send = (type, extra = {}) => ws.send(JSON.stringify({ type, ...extra }));
+
+function unlockAudio() {
+  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (audio && audio.state === 'suspended') audio.resume();
+}
+
+function beep() {
+  if (!audio) return;
+  const t = audio.currentTime;
+  const o = audio.createOscillator(), g = audio.createGain();
+  o.connect(g); g.connect(audio.destination);
+  o.type = 'square';
+  o.frequency.setValueAtTime(880, t);
+  o.frequency.setValueAtTime(660, t + 0.18);
+  g.gain.setValueAtTime(0.18, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+  o.start(t); o.stop(t + 0.45);
+}
+
+function startRing() {
+  unlockAudio();
+  if (!audio) return;
+  beep();
+  clearInterval(beepTimer); clearInterval(vibTimer);
+  beepTimer = setInterval(beep, 700);
+  if (navigator.vibrate) {
+    navigator.vibrate([400, 250, 400]);
+    vibTimer = setInterval(() => navigator.vibrate([400, 250]), 1300);
+  }
+}
+
+function stopRing() {
+  clearInterval(beepTimer); clearInterval(vibTimer);
+  if (navigator.vibrate) navigator.vibrate(0);
+}
+
+ws.onopen = () => send('laptop-offline');
+ws.onclose = () => { stopRing(); $('connectNote').textContent = 'Local connection lost — check Wi-Fi.'; };
+ws.onmessage = e => { const d = JSON.parse(e.data); if (d.type !== 'state') return; current = d; render(); };
+
+$('save').onclick = () => {
+  unlockAudio();
+  const time = $('time').value || '06:30';
+  const [h, m] = time.split(':').map(Number);
+  const at = new Date(); at.setHours(h, m, 0, 0);
+  if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+  send('schedule', { target: $('target').value, alarmAt: at.getTime() });
+};
+
+$('dismiss').onclick = () => send('dismiss');
+$('back').onclick = () => send('resume');
+$('end').onclick = () => send('end');
+
+function fmt(at) { return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+function headlineFor(s) {
+  if (s.state === 'complete') return 'Session complete. Nice work.';
+  if (s.state === 're-alarm') return 'Come back to work.';
+  if (s.state === 'phone-fallback') return 'Phone-only focus — keep going.';
+  if (s.state === 'waiting-for-laptop') return 'Waiting for the laptop…';
+  if (s.state === 'monitoring') return 'Monitoring — stay with it.';
+  return 'Your morning is queued.';
+}
+
+function detailFor(s, online) {
+  if (s.state === 'waiting-for-laptop') return `${s.waitingSecondsLeft ?? 600}s left to connect the laptop, then phone-only fallback starts.`;
+  if (s.state === 'monitoring') return online ? 'The laptop is validating your work.' : 'Laptop signal lost — reconnect the agent tab.';
+  if (s.state === 'phone-fallback') return 'Laptop unavailable. Phone-only mode: finish your target.';
+  if (s.state === 're-alarm') return s.reason === 'laptop-required'
+    ? 'Phone-only was used last time. The laptop is required today — connect it to continue.'
+    : 'Your work was not validated. Get back to the laptop within 5 minutes.';
+  if (s.state === 'complete') return `Result: ${s.mode}.`;
+  return '';
+}
+
+function render() {
+  const s = current.state;
+  const online = current.laptopOnline;
+  $('laptopStatus').textContent = online ? 'connected' : 'offline';
+  $('laptopStatus').className = online ? 'on' : '';
+  $('agentUrl').textContent = current.agentUrl;
+  if (s.target) $('alarmInfo').textContent = `Alarm set for ${fmt(s.alarmAt)} — target: ${s.target}`;
+
+  const inSession = s.target && s.state !== 'scheduled';
+  $('session').classList.toggle('hidden', !inSession);
+  if (inSession) {
+    $('state').textContent = s.state.replaceAll('-', ' ');
+    $('mode').textContent = s.mode || '';
+    $('minutes').textContent = s.totalMinutes;
+    $('progress').style.width = Math.min(100, s.totalMinutes / 30 * 100) + '%';
+    $('headline').textContent = headlineFor(s);
+    $('detail').textContent = detailFor(s, online);
+    $('back').classList.toggle('hidden', s.state !== 're-alarm');
+  }
+
+  const ringing = s.state === 'ringing';
+  $('alarmOverlay').classList.toggle('visible', ringing);
+  $('alarmTarget').textContent = ringing ? s.target : '';
+  if (ringing) startRing(); else stopRing();
+}
+</script>
+</body>
+</html>
