@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wakework</title><link rel="stylesheet" href="/style.css"></head>
+<body><main class="phone-shell">
+  <header><span class="eyebrow">OFFLINE ACCOUNTABILITY</span><h1>Wakework</h1><p class="muted">Wake up. Pick one thing. Stay with it.</p></header>
+  <section class="card setup"><label for="target">Morning work target</label><input id="target" placeholder="e.g. finish the project brief"><button id="save">Set alarm</button><p id="connection" class="status">Connecting to local network...</p></section>
+  <section class="card session hidden" id="session"><div class="session-top"><span id="state">Scheduled</span><span id="mode"></span></div><h2 id="headline">Your morning is queued.</h2><p id="detail" class="muted"></p><div class="progress"><i id="progress"></i></div><div class="minutes"><strong id="minutes">0</strong><span>/ 30 validated minutes</span></div><div class="actions"><button id="ring">Simulate alarm</button><button id="dismiss" class="secondary">Dismiss</button><button id="end" class="quiet">End session</button></div></section>
+  <p class="footnote">Laptop agent: <a href="/agent">open monitoring screen</a></p>
+</main><script>
+const ws = new WebSocket(`ws://${location.host}`); const $ = id => document.getElementById(id); let current;
+const send = (type, extra={}) => ws.send(JSON.stringify({type, ...extra}));
+ws.onopen = () => $('connection').textContent = 'Local connection ready';
+ws.onclose = () => $('connection').textContent = 'Local connection lost';
+ws.onmessage = event => { const data=JSON.parse(event.data); if(data.type!=='state') return; current=data; render(); };
+$('save').onclick=()=>send('schedule',{target:$('target').value}); $('ring').onclick=()=>send('ring'); $('dismiss').onclick=()=>send('dismiss'); $('end').onclick=()=>send('end');
+function render(){ const s=current.state; if(current.state.target){$('session').classList.remove('hidden');$('target').disabled=true;} $('state').textContent=s.state.replaceAll('-',' '); $('mode').textContent=s.mode||''; $('minutes').textContent=s.totalMinutes; $('progress').style.width=`${Math.min(100,current.state.totalMinutes/30*100)}%`; $('detail').textContent=current.laptopOnline?'Laptop agent connected locally':'Laptop unavailable; fallback starts after 10 minutes'; $('headline').textContent=s.state==='complete'?'Session complete.':s.state==='re-alarm'?'Time to come back.':s.state==='phone-fallback'?'Phone-only focus is active.':'Stay with your target.'; }
+setInterval(()=>{if(current) send('tick',{working:current.state.state==='monitoring'});},60000);
+</script></body></html>
