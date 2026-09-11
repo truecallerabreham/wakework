@@ -2,6 +2,10 @@
 
 Phone rings → you get up → laptop monitors 30 minutes of real work. No internet, no cloud.
 
+## Download the app (no build needed)
+
+Get the installable Android APK from [**Releases**](https://github.com/truecallerabreham/wakework/releases/latest): download `Wakework.apk`, open it on your phone, and allow "install unknown apps" when prompted. Every push to `main` rebuilds it automatically via GitHub Actions.
+
 Two clients:
 
 - **Native phone app** (`mobile/`) — a real Android app (React Native / Expo) with OS-level alarm notifications that ring even when the app is closed. Runs through Expo Go over your local Wi-Fi — no browser.
