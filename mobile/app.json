@@ -21,7 +21,12 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["SCHEDULE_EXACT_ALARM", "VIBRATE", "POST_NOTIFICATIONS"]
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "VIBRATE",
+        "POST_NOTIFICATIONS"
+      ],
+      "package": "com.wakework.app"
     },
     "web": {
       "favicon": "./assets/favicon.png"
