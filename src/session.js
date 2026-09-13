@@ -17,12 +17,12 @@ export const STATES = Object.freeze({
 
 const FIVE_MINUTES = 5 * 60 * 1000;
 const RECOVERY_WINDOW = 10 * 60 * 1000;
-const SESSION_LENGTH = 30 * 60 * 1000;
 
 export class AlarmSession {
   constructor({ now = Date.now, previousPhoneOnly = false } = {}) {
     this.now = now;
     this.previousPhoneOnly = previousPhoneOnly;
+    this.history = [];
     this.reset();
   }
 
@@ -38,14 +38,52 @@ export class AlarmSession {
     this.lastCheck = null;
     this.nextAlarmAt = null;
     this.reason = null;
+    this.snoozesLeft = 3;
+    this.pausesLeft = 3;
+    this.pausedAt = null;
+    this.isPaused = false;
+    this.durationMinutes = 30;
   }
 
-  schedule(target, alarmAt = null) {
+  schedule({ target, alarmAt = null, durationMinutes = 30 }) {
     if (!target?.trim()) throw new Error('A work target is required');
     this.reset();
     this.target = target.trim();
     this.alarmAt = alarmAt;
+    this.durationMinutes = Math.max(10, Math.min(120, durationMinutes));
     this.state = STATES.SCHEDULED;
+    return this.snapshot();
+  }
+
+  snooze(minutes) {
+    if (this.state !== STATES.RINGING || this.snoozesLeft <= 0) return this.snapshot();
+    const snoozeMs = Math.min(minutes, 15) * 60 * 1000;
+    this.alarmAt = this.now() + snoozeMs;
+    this.state = STATES.SCHEDULED;
+    this.snoozesLeft--;
+    return this.snapshot();
+  }
+
+  pause() {
+    if (![STATES.WAITING_FOR_LAPTOP, STATES.MONITORING, STATES.PHONE_FALLBACK].includes(this.state)) return this.snapshot();
+    if (this.isPaused || this.pausesLeft <= 0) return this.snapshot();
+    this.isPaused = true;
+    this.pausedAt = this.now();
+    this.pausesLeft--;
+    this.lastTick = this.now();
+    return this.snapshot();
+  }
+
+  unpause() {
+    if (!this.isPaused) return this.snapshot();
+    this.isPaused = false;
+    
+    // adjust timestamps so paused time is skipped
+    const pausedDuration = this.now() - this.pausedAt;
+    if (this.startedAt) this.startedAt += pausedDuration;
+    this.lastTick = this.now();
+    this.pausedAt = null;
+    
     return this.snapshot();
   }
 
@@ -61,6 +99,8 @@ export class AlarmSession {
     this.reason = null;
     this.nextAlarmAt = null;
     this.lastTick = this.now();
+    this.isPaused = false;
+    this.pausedAt = null;
     if (laptopOnline) {
       this.state = STATES.MONITORING;
       this.mode = this.phoneMs > 0 ? MODES.MIXED : MODES.LAPTOP;
@@ -75,6 +115,8 @@ export class AlarmSession {
   ring() {
     if (![STATES.SCHEDULED, STATES.RE_ALARM].includes(this.state)) return this.snapshot();
     this.state = STATES.RINGING;
+    this.isPaused = false;
+    this.pausedAt = null;
     return this.snapshot();
   }
 
@@ -98,7 +140,18 @@ export class AlarmSession {
 
   tick({ working = false, checkIn = false } = {}) {
     const now = this.now();
-    if (!this.lastTick) this.lastTick = now;
+    if (this.lastTick === null) this.lastTick = now;
+    
+    if (this.isPaused) {
+      const pausedTime = now - this.pausedAt;
+      if (pausedTime >= FIVE_MINUTES) {
+        this.unpause();
+      } else {
+        this.lastTick = now;
+        return this.snapshot();
+      }
+    }
+
     const elapsed = Math.max(0, now - this.lastTick);
     this.lastTick = now;
 
@@ -116,9 +169,8 @@ export class AlarmSession {
       this.phoneMs += elapsed;
     }
 
-    if (this.totalCreditMs() >= SESSION_LENGTH) {
-      this.state = STATES.COMPLETE;
-      this.nextAlarmAt = null;
+    if (this.totalCreditMs() >= this.durationMinutes * 60 * 1000) {
+      this.completeSession();
     }
     return this.snapshot();
   }
@@ -127,7 +179,22 @@ export class AlarmSession {
     this.state = STATES.RE_ALARM;
     this.reason = reason;
     this.nextAlarmAt = this.now() + FIVE_MINUTES;
+    this.isPaused = false;
+    this.pausedAt = null;
     return this.snapshot();
+  }
+
+  completeSession() {
+    this.state = STATES.COMPLETE;
+    this.nextAlarmAt = null;
+    this.isPaused = false;
+    this.pausedAt = null;
+    this.history.push({
+      timestamp: this.now(),
+      mode: this.mode,
+      duration: this.durationMinutes,
+      target: this.target
+    });
   }
 
   end() {
@@ -138,6 +205,51 @@ export class AlarmSession {
 
   totalCreditMs() {
     return this.validatedMs + this.phoneMs;
+  }
+
+  getHistory() {
+    return this.history;
+  }
+
+  getStats() {
+    if (this.history.length === 0) {
+      return { totalSessions: 0, streaks: 0, averageSessionTime: 0, modeDistribution: {} };
+    }
+
+    const totalSessions = this.history.length;
+    let totalDuration = 0;
+    const modeDistribution = {};
+
+    let streaks = 0;
+    let currentStreak = 0;
+    let lastDate = null;
+
+    const sortedHistory = [...this.history].sort((a, b) => a.timestamp - b.timestamp);
+
+    for (const session of sortedHistory) {
+      totalDuration += session.duration;
+      modeDistribution[session.mode] = (modeDistribution[session.mode] || 0) + 1;
+
+      const date = new Date(session.timestamp).toDateString();
+      if (!lastDate) {
+        currentStreak = 1;
+        lastDate = date;
+      } else if (lastDate !== date) {
+        const diffTime = Math.abs(new Date(date) - new Date(lastDate));
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+        if (diffDays === 1) {
+          currentStreak++;
+        } else if (diffDays > 1) {
+          currentStreak = 1;
+        }
+        lastDate = date;
+      }
+      streaks = Math.max(streaks, currentStreak);
+    }
+
+    const averageSessionTime = totalSessions > 0 ? totalDuration / totalSessions : 0;
+
+    return { totalSessions, streaks, averageSessionTime, modeDistribution };
   }
 
   snapshot() {
@@ -153,9 +265,14 @@ export class AlarmSession {
       validatedMinutes: Math.floor(this.validatedMs / 60000),
       phoneMinutes: Math.floor(this.phoneMs / 60000),
       totalMinutes: Math.floor(this.totalCreditMs() / 60000),
-      remainingMinutes: Math.max(0, 30 - Math.floor(this.totalCreditMs() / 60000)),
+      remainingMinutes: Math.max(0, this.durationMinutes - Math.floor(this.totalCreditMs() / 60000)),
       reason: this.reason,
-      nextAlarmAt: this.nextAlarmAt
+      nextAlarmAt: this.nextAlarmAt,
+      snoozesLeft: this.snoozesLeft,
+      pausesLeft: this.pausesLeft,
+      pausedAt: this.pausedAt,
+      isPaused: this.isPaused,
+      durationMinutes: this.durationMinutes
     };
   }
 }

@@ -1,50 +1,232 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wakework Agent</title>
-<link rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WakeWork Agent</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main class="agent-shell">
-  <span class="eyebrow">LOCAL LAPTOP AGENT</span>
-  <h1>Monitoring console</h1>
-  <p class="muted">Keep this tab open. It holds the local connection the phone depends on. Camera, screen, and input adapters plug in here later.</p>
-  <div class="card agent-card">
-    <div class="live-dot"></div>
-    <h2 id="status">Connecting...</h2>
-    <p id="target">Waiting for a phone session.</p>
-    <p class="status" id="sessionLine"></p>
-    <button id="working">Confirm working</button>
-    <button id="away" class="secondary">Mark uncertain</button>
-  </div>
-  <p><a href="/">Back to phone controller</a></p>
-</main>
-<script>
-const ws = new WebSocket(`ws://${location.host}`);
-const $ = id => document.getElementById(id);
-let online = true;
+  <div class="container" style="max-width: 800px;">
+    <header class="flex justify-between items-center">
+      <h1>WakeWork Agent</h1>
+      <div class="status-indicator">
+        <div class="dot disconnected" id="conn-dot"></div>
+        <span id="conn-text">Disconnected</span>
+      </div>
+    </header>
 
-ws.onopen = () => {
-  ws.send(JSON.stringify({ type: 'laptop-online' }));
-  $('status').textContent = 'Agent online locally';
-};
-setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'laptop-online' })); }, 10000);
-ws.onmessage = e => {
-  const d = JSON.parse(e.data);
-  if (d.type !== 'state') return;
-  const s = d.state;
-  $('target').textContent = s.target ? `Target: ${s.target}` : 'Waiting for a phone session.';
-  const pieces = [s.state.replaceAll('-', ' ')];
-  if (s.mode) pieces.push(s.mode);
-  if (s.totalMinutes || s.validatedMinutes || s.phoneMinutes) pieces.push(`${s.totalMinutes}/30 min`);
-  if (s.nextAlarmAt) pieces.push(`re-alarm at ${new Date(s.nextAlarmAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
-  $('sessionLine').textContent = pieces.join(' · ');
-};
-$('working').onclick = () => ws.send(JSON.stringify({ type: 'tick', working: true, checkIn: true }));
-$('away').onclick = () => ws.send(JSON.stringify({ type: 'tick', working: false }));
-window.onbeforeunload = () => ws.send(JSON.stringify({ type: 'laptop-offline' }));
-</script>
+    <!-- Status Hero -->
+    <div class="card" style="text-align: center; padding: 3rem;">
+      <h2 style="border: none; font-size: 3rem; margin-bottom: 0;" id="agent-state">IDLE</h2>
+      <div class="mono mt-2" style="font-size: 1.2rem; color: var(--orange);" id="agent-target">Waiting for session…</div>
+      <div class="mono mt-2" style="color: var(--muted);" id="agent-mode"></div>
+    </div>
+
+    <div class="flex" style="gap: 2rem; flex-wrap: wrap;">
+      <!-- Session Progress -->
+      <div class="card flex-col" style="flex: 2; min-width: 300px;">
+        <h2>Session Progress</h2>
+        <div class="progress-container mt-2">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="flex justify-between mt-2">
+          <span class="mono" id="time-validated">Validated: 0m</span>
+          <span class="mono" id="time-remaining">0 min left</span>
+        </div>
+
+        <h3 class="mt-2">Quick Actions</h3>
+        <div class="flex mt-2">
+          <button class="primary" id="work-btn" style="flex:1;">Working (W)</button>
+          <button class="danger" id="away-btn" style="flex:1;">Away (A)</button>
+        </div>
+        <label class="mt-2" style="display:flex; align-items:center; gap:0.5rem; cursor:pointer;">
+          <input type="checkbox" id="auto-val-toggle" style="width:auto;">
+          Auto-validate every 5 min
+        </label>
+      </div>
+
+      <!-- System Info -->
+      <div class="card flex-col" style="flex: 1; min-width: 200px;">
+        <h2>System Info</h2>
+        <div class="mt-2">
+          <label>Server Uptime</label>
+          <div id="sys-uptime" class="mono">-</div>
+        </div>
+        <div class="mt-2">
+          <label>Total Sessions</label>
+          <div id="sys-sessions" class="mono">-</div>
+        </div>
+        <div class="mt-2">
+          <label>Version</label>
+          <div id="sys-version" class="mono">-</div>
+        </div>
+        <div class="mt-2">
+          <label>Laptop Connected</label>
+          <div id="sys-laptop" class="mono">-</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="card">
+      <h2>Activity Log</h2>
+      <div class="log-window mt-2" id="log-window"></div>
+    </div>
+
+    <footer>
+      <p class="mono" style="text-align: center; color: var(--muted);"><a href="/" style="color: var(--orange);">Back to phone controller</a></p>
+    </footer>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script>
+  const $ = id => document.getElementById(id);
+  let ws;
+  let autoValInterval;
+  let lastState = null;
+
+  function logEvent(msg) {
+    const lw = $('log-window');
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    const time = new Date().toLocaleTimeString();
+    entry.innerHTML = `<span class="log-time">[${time}]</span> ${msg}`;
+    lw.appendChild(entry);
+    lw.scrollTop = lw.scrollHeight;
+    // Keep log manageable
+    if (lw.children.length > 200) lw.removeChild(lw.firstChild);
+  }
+
+  function showToast(msg) {
+    const c = $('toast-container');
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
+  }
+
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}`);
+
+    ws.onopen = () => {
+      $('conn-dot').className = 'dot connected';
+      $('conn-text').textContent = 'Connected';
+      // Identify as laptop agent
+      ws.send(JSON.stringify({ type: 'laptop-online' }));
+      logEvent('Connected — identified as laptop agent');
+    };
+
+    ws.onclose = () => {
+      $('conn-dot').className = 'dot disconnected';
+      $('conn-text').textContent = 'Disconnected';
+      logEvent('Connection lost. Retrying…');
+      setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => {};
+
+    ws.onmessage = e => {
+      const d = JSON.parse(e.data);
+      if (d.type !== 'state') return;
+      const s = d.state;
+
+      // Log state changes
+      if (lastState !== s.state) {
+        logEvent(`State → ${s.state.replaceAll('-', ' ')}`);
+        lastState = s.state;
+      }
+
+      // Update hero
+      $('agent-state').textContent = s.state.replaceAll('-', ' ').toUpperCase();
+      $('agent-target').textContent = s.target ? `Target: ${s.target}` : 'Waiting for session…';
+      $('agent-mode').textContent = s.mode ? `Mode: ${s.mode}` : '';
+
+      // Progress
+      const dur = s.durationMinutes || 30;
+      const pct = Math.min(100, (s.totalMinutes / dur) * 100);
+      $('progress-bar').style.width = pct + '%';
+      $('time-validated').textContent = `Validated: ${s.validatedMinutes}m · Phone: ${s.phoneMinutes}m · Total: ${s.totalMinutes}m`;
+      $('time-remaining').textContent = `${s.remainingMinutes} min left`;
+
+      // System info
+      $('sys-laptop').textContent = d.laptopOnline ? 'Yes ✓' : 'No ✗';
+
+      // Pause info
+      if (s.isPaused) {
+        logEvent(`Paused. ${s.pausesLeft} pauses left.`);
+      }
+    };
+  }
+
+  // Keep-alive: re-send laptop-online every 10s
+  setInterval(() => {
+    if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'laptop-online' }));
+    }
+  }, 10000);
+
+  function sendTick(working) {
+    if (ws && ws.readyState === 1) {
+      const payload = { type: 'tick', working, checkIn: working };
+      ws.send(JSON.stringify(payload));
+      logEvent(`Tick → ${working ? 'working ✓' : 'away ✗'}`);
+      showToast(working ? 'Marked as working' : 'Marked as away');
+    } else {
+      showToast('Not connected');
+    }
+  }
+
+  $('work-btn').addEventListener('click', () => sendTick(true));
+  $('away-btn').addEventListener('click', () => sendTick(false));
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key.toLowerCase() === 'w') sendTick(true);
+    if (e.key.toLowerCase() === 'a') sendTick(false);
+  });
+
+  // Auto-validation toggle
+  $('auto-val-toggle').addEventListener('change', e => {
+    if (e.target.checked) {
+      logEvent('Auto-validation enabled (every 5 min)');
+      showToast('Auto-validation ON');
+      // Send immediately
+      sendTick(true);
+      autoValInterval = setInterval(() => sendTick(true), 5 * 60 * 1000);
+    } else {
+      logEvent('Auto-validation disabled');
+      showToast('Auto-validation OFF');
+      clearInterval(autoValInterval);
+    }
+  });
+
+  // On unload, tell server laptop is going offline
+  window.onbeforeunload = () => {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'laptop-offline' }));
+  };
+
+  // Fetch system info
+  async function loadSysInfo() {
+    try {
+      const resHealth = await fetch('/api/health').catch(() => null);
+      if (resHealth && resHealth.ok) {
+        const health = await resHealth.json();
+        $('sys-uptime').textContent = typeof health.uptime === 'number'
+          ? `${Math.floor(health.uptime / 60)}m ${Math.floor(health.uptime % 60)}s`
+          : (health.uptime || 'Unknown');
+        $('sys-sessions').textContent = health.sessions ?? '-';
+        $('sys-version').textContent = health.version ?? '-';
+      }
+    } catch (e) {}
+  }
+
+  connect();
+  loadSysInfo();
+  setInterval(loadSysInfo, 60000);
+  </script>
 </body>
 </html>

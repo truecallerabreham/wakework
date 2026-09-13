@@ -1,161 +1,389 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Wakework</title>
-<link rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WakeWork</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<main class="phone-shell">
-  <header>
-    <span class="eyebrow">OFFLINE ACCOUNTABILITY</span>
-    <h1>Wakework</h1>
-    <p class="muted">Set the alarm. Sleep. Wake up and work 30 real minutes.</p>
-  </header>
+  <div class="container">
+    <header class="flex justify-between items-center">
+      <h1>WakeWork</h1>
+      <div class="status-indicator">
+        <div class="dot disconnected" id="conn-dot"></div>
+        <span id="conn-text">Disconnected</span>
+      </div>
+    </header>
 
-  <section class="card setup">
-    <label for="time">Alarm time</label>
-    <input type="time" id="time" value="06:30">
-    <label for="target">Morning work target</label>
-    <input id="target" placeholder="e.g. finish the project brief">
-    <button id="save">Set alarm</button>
-    <p id="alarmInfo" class="status">No alarm set yet.</p>
-  </section>
-
-  <section class="card connect">
-    <div class="session-top"><span>LAPTOP AGENT</span><span id="laptopStatus">offline</span></div>
-    <p class="muted">On your laptop, open this page once and leave the tab open:</p>
-    <p class="agent-url" id="agentUrl">checking...</p>
-    <p class="status" id="connectNote">Both devices must share the same Wi-Fi or hotspot.</p>
-  </section>
-
-  <section class="card session hidden" id="session">
-    <div class="session-top"><span id="state">Scheduled</span><span id="mode"></span></div>
-    <h2 id="headline">Your morning is queued.</h2>
-    <p id="detail" class="muted"></p>
-    <div class="progress"><i id="progress"></i></div>
-    <div class="minutes"><strong id="minutes">0</strong><span>/ 30 validated minutes</span></div>
-    <div class="actions">
-      <button id="back" class="secondary hidden">I'm back at the laptop</button>
-      <button id="end" class="quiet">End session</button>
+    <!-- Setup Section -->
+    <div class="card" id="setup-section">
+      <h2>New Session</h2>
+      <div class="flex-col mt-2">
+        <div>
+          <label>Target Task</label>
+          <input type="text" id="target-input" placeholder="e.g. finish the project brief">
+        </div>
+        <div>
+          <label>Alarm Time</label>
+          <input type="time" id="time-input" value="06:30">
+        </div>
+        <div>
+          <label>Duration (minutes)</label>
+          <div class="flex" style="flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem;" id="duration-selector">
+            <button class="outline duration-btn" data-val="10">10</button>
+            <button class="outline duration-btn" data-val="15">15</button>
+            <button class="outline duration-btn" data-val="20">20</button>
+            <button class="primary duration-btn active" data-val="30">30</button>
+            <button class="outline duration-btn" data-val="45">45</button>
+            <button class="outline duration-btn" data-val="60">60</button>
+          </div>
+        </div>
+        <button class="primary mt-2" id="save-btn">Set alarm</button>
+        <p class="mono mt-2" id="alarm-info">No alarm set yet.</p>
+      </div>
     </div>
-  </section>
-</main>
 
-<div id="alarmOverlay" class="alarm-overlay">
-  <p class="eyebrow">WAKE UP</p>
-  <h1>Time to work</h1>
-  <p id="alarmTarget" class="muted"></p>
-  <button id="dismiss" class="big">I'm up — start my session</button>
-</div>
+    <!-- Connection Section -->
+    <div class="card">
+      <div class="flex justify-between items-center">
+        <label>LAPTOP AGENT</label>
+        <span class="tag" id="laptop-status">offline</span>
+      </div>
+      <p class="mono mt-2">On your laptop, open this page and leave the tab open:</p>
+      <div class="mono mt-2" style="border: 1px dashed var(--line); padding: 0.75rem; border-radius: 4px; word-break: break-all;" id="agent-url">checking…</div>
+      <p class="mono mt-2" style="color: var(--muted);">Both devices must share the same Wi-Fi or hotspot.</p>
+    </div>
 
-<script>
-const ws = new WebSocket(`ws://${location.host}`);
-const $ = id => document.getElementById(id);
-let current, audio, beepTimer, vibTimer;
+    <!-- Session Monitoring Section -->
+    <div class="card hidden" id="session-section">
+      <div class="flex justify-between items-center mb-2">
+        <span class="tag active" id="session-state">scheduled</span>
+        <span class="tag" id="session-mode"></span>
+      </div>
+      <h2 id="headline" style="border: none;">Your morning is queued.</h2>
+      <p class="mono" id="detail" style="color: var(--muted);"></p>
 
-const send = (type, extra = {}) => ws.send(JSON.stringify({ type, ...extra }));
+      <div class="mb-2 mt-2">
+        <label>Progress</label>
+        <div class="progress-container mt-2">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="flex justify-between mt-2">
+          <span class="mono" id="minutes-display">0 / 30 min</span>
+          <span class="mono" id="remaining-display">30 min left</span>
+        </div>
+      </div>
 
-function unlockAudio() {
-  if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
-  if (audio && audio.state === 'suspended') audio.resume();
-}
+      <div class="flex mt-2" style="flex-wrap: wrap; gap: 0.5rem;">
+        <button class="outline hidden" id="pause-btn">Pause</button>
+        <button class="outline hidden" id="unpause-btn">Unpause</button>
+        <button class="outline hidden" id="back-btn">I'm back at the laptop</button>
+        <button class="danger" id="end-btn">End session</button>
+      </div>
+      <p class="mono mt-2 hidden" id="pause-info"></p>
+    </div>
 
-function beep() {
-  if (!audio) return;
-  const t = audio.currentTime;
-  const o = audio.createOscillator(), g = audio.createGain();
-  o.connect(g); g.connect(audio.destination);
-  o.type = 'square';
-  o.frequency.setValueAtTime(880, t);
-  o.frequency.setValueAtTime(660, t + 0.18);
-  g.gain.setValueAtTime(0.18, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-  o.start(t); o.stop(t + 0.45);
-}
+    <!-- Statistics Section -->
+    <div class="card">
+      <h2>Statistics</h2>
+      <div class="stats-grid mt-2">
+        <div class="stats-card">
+          <label>Streak</label>
+          <div class="value" id="stat-streak">0</div>
+        </div>
+        <div class="stats-card">
+          <label>Sessions</label>
+          <div class="value" id="stat-total">0</div>
+        </div>
+        <div class="stats-card">
+          <label>Avg (min)</label>
+          <div class="value" id="stat-avg">0</div>
+        </div>
+      </div>
+    </div>
 
-function startRing() {
-  unlockAudio();
-  if (!audio) return;
-  beep();
-  clearInterval(beepTimer); clearInterval(vibTimer);
-  beepTimer = setInterval(beep, 700);
-  if (navigator.vibrate) {
-    navigator.vibrate([400, 250, 400]);
-    vibTimer = setInterval(() => navigator.vibrate([400, 250]), 1300);
-  }
-}
+    <!-- History Section -->
+    <div class="card">
+      <h2>History</h2>
+      <ul class="history-list mt-2" id="history-list">
+        <li class="history-item"><span>No sessions yet</span></li>
+      </ul>
+    </div>
 
-function stopRing() {
-  clearInterval(beepTimer); clearInterval(vibTimer);
-  if (navigator.vibrate) navigator.vibrate(0);
-}
+    <footer>
+      <p class="mono" style="text-align: center; color: var(--muted);">WakeWork v1.0.0 — offline accountability</p>
+    </footer>
+  </div>
 
-ws.onopen = () => send('laptop-offline');
-ws.onclose = () => { stopRing(); $('connectNote').textContent = 'Local connection lost — check Wi-Fi.'; };
-ws.onmessage = e => { const d = JSON.parse(e.data); if (d.type !== 'state') return; current = d; render(); };
+  <!-- Alarm Overlay -->
+  <div id="alarm-overlay" class="hidden">
+    <div class="alarm-time">WAKE UP</div>
+    <p style="font-size: 1.3rem; margin-bottom: 1rem;" id="alarm-target"></p>
+    <div class="snooze-options">
+      <button class="snooze-btn" data-val="5">+5 min</button>
+      <button class="snooze-btn" data-val="10">+10 min</button>
+      <button class="snooze-btn" data-val="15">+15 min</button>
+    </div>
+    <div class="flex" style="gap: 1rem;">
+      <button class="primary" style="font-size: 1.3rem;" id="dismiss-btn">I'm up — start my session</button>
+      <button class="snooze-btn" id="sound-toggle">Mute</button>
+    </div>
+    <p class="mono mt-2" id="snooze-info" style="color: rgba(255,255,255,0.7);"></p>
+  </div>
 
-$('save').onclick = () => {
-  unlockAudio();
-  const time = $('time').value || '06:30';
-  const [h, m] = time.split(':').map(Number);
-  const at = new Date(); at.setHours(h, m, 0, 0);
-  if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
-  send('schedule', { target: $('target').value, alarmAt: at.getTime() });
-};
+  <div id="toast-container"></div>
 
-$('dismiss').onclick = () => send('dismiss');
-$('back').onclick = () => send('resume');
-$('end').onclick = () => send('end');
+  <script>
+  const $ = id => document.getElementById(id);
+  let ws, current, audio, beepTimer, vibTimer;
+  let selectedDuration = 30;
+  let soundEnabled = true;
 
-function fmt(at) { return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-
-function headlineFor(s) {
-  if (s.state === 'complete') return 'Session complete. Nice work.';
-  if (s.state === 're-alarm') return 'Come back to work.';
-  if (s.state === 'phone-fallback') return 'Phone-only focus — keep going.';
-  if (s.state === 'waiting-for-laptop') return 'Waiting for the laptop…';
-  if (s.state === 'monitoring') return 'Monitoring — stay with it.';
-  return 'Your morning is queued.';
-}
-
-function detailFor(s, online) {
-  if (s.state === 'waiting-for-laptop') return `${s.waitingSecondsLeft ?? 600}s left to connect the laptop, then phone-only fallback starts.`;
-  if (s.state === 'monitoring') return online ? 'The laptop is validating your work.' : 'Laptop signal lost — reconnect the agent tab.';
-  if (s.state === 'phone-fallback') return 'Laptop unavailable. Phone-only mode: finish your target.';
-  if (s.state === 're-alarm') return s.reason === 'laptop-required'
-    ? 'Phone-only was used last time. The laptop is required today — connect it to continue.'
-    : 'Your work was not validated. Get back to the laptop within 5 minutes.';
-  if (s.state === 'complete') return `Result: ${s.mode}.`;
-  return '';
-}
-
-function render() {
-  const s = current.state;
-  const online = current.laptopOnline;
-  $('laptopStatus').textContent = online ? 'connected' : 'offline';
-  $('laptopStatus').className = online ? 'on' : '';
-  $('agentUrl').textContent = current.agentUrl;
-  if (s.target) $('alarmInfo').textContent = `Alarm set for ${fmt(s.alarmAt)} — target: ${s.target}`;
-
-  const inSession = s.target && s.state !== 'scheduled';
-  $('session').classList.toggle('hidden', !inSession);
-  if (inSession) {
-    $('state').textContent = s.state.replaceAll('-', ' ');
-    $('mode').textContent = s.mode || '';
-    $('minutes').textContent = s.totalMinutes;
-    $('progress').style.width = Math.min(100, s.totalMinutes / 30 * 100) + '%';
-    $('headline').textContent = headlineFor(s);
-    $('detail').textContent = detailFor(s, online);
-    $('back').classList.toggle('hidden', s.state !== 're-alarm');
+  /* ---- Toast ---- */
+  function showToast(msg) {
+    const c = $('toast-container');
+    const t = document.createElement('div');
+    t.className = 'toast';
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
   }
 
-  const ringing = s.state === 'ringing';
-  $('alarmOverlay').classList.toggle('visible', ringing);
-  $('alarmTarget').textContent = ringing ? s.target : '';
-  if (ringing) startRing(); else stopRing();
-}
-</script>
+  /* ---- Duration selector ---- */
+  document.querySelectorAll('.duration-btn').forEach(b => {
+    b.addEventListener('click', e => {
+      document.querySelectorAll('.duration-btn').forEach(btn => {
+        btn.classList.remove('active', 'primary');
+        btn.classList.add('outline');
+      });
+      e.target.classList.remove('outline');
+      e.target.classList.add('active', 'primary');
+      selectedDuration = parseInt(e.target.dataset.val);
+    });
+  });
+
+  /* ---- Audio ---- */
+  function unlockAudio() {
+    if (!audio) { try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (audio && audio.state === 'suspended') audio.resume();
+  }
+
+  function beep() {
+    if (!audio || !soundEnabled) return;
+    const t = audio.currentTime;
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.connect(g); g.connect(audio.destination);
+    o.type = 'square';
+    o.frequency.setValueAtTime(880, t);
+    o.frequency.setValueAtTime(660, t + 0.18);
+    g.gain.setValueAtTime(0.18, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    o.start(t); o.stop(t + 0.45);
+  }
+
+  function startRing() {
+    unlockAudio();
+    beep();
+    clearInterval(beepTimer); clearInterval(vibTimer);
+    beepTimer = setInterval(beep, 700);
+    if (navigator.vibrate) {
+      navigator.vibrate([400, 250, 400]);
+      vibTimer = setInterval(() => navigator.vibrate([400, 250]), 1300);
+    }
+  }
+
+  function stopRing() {
+    clearInterval(beepTimer); clearInterval(vibTimer);
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+
+  /* ---- Sound toggle ---- */
+  $('sound-toggle').onclick = e => {
+    soundEnabled = !soundEnabled;
+    e.target.textContent = soundEnabled ? 'Mute' : 'Unmute';
+    if (!soundEnabled) stopRing();
+  };
+
+  /* ---- WebSocket ---- */
+  const send = (type, extra = {}) => ws && ws.readyState === 1 && ws.send(JSON.stringify({ type, ...extra }));
+
+  function connect() {
+    ws = new WebSocket(`ws://${location.host}`);
+    ws.onopen = () => {
+      $('conn-dot').className = 'dot connected';
+      $('conn-text').textContent = 'Connected';
+      send('laptop-offline'); // phone client identifies as non-laptop
+      showToast('Connected to server');
+    };
+    ws.onclose = () => {
+      $('conn-dot').className = 'dot disconnected';
+      $('conn-text').textContent = 'Disconnected';
+      setTimeout(connect, 3000);
+    };
+    ws.onerror = () => {};
+    ws.onmessage = e => {
+      const d = JSON.parse(e.data);
+      if (d.type !== 'state') return;
+      const prev = current;
+      current = d;
+      render();
+      if (prev && prev.state && prev.state.state !== d.state.state) {
+        showToast(`State: ${d.state.state.replaceAll('-', ' ')}`);
+      }
+    };
+  }
+
+  /* ---- Actions ---- */
+  $('save-btn').onclick = () => {
+    unlockAudio();
+    const time = $('time-input').value || '06:30';
+    const [h, m] = time.split(':').map(Number);
+    const at = new Date(); at.setHours(h, m, 0, 0);
+    if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+    send('schedule', {
+      target: $('target-input').value || 'Work session',
+      alarmAt: at.getTime(),
+      durationMinutes: selectedDuration
+    });
+  };
+
+  $('dismiss-btn').onclick = () => send('dismiss');
+  $('back-btn').onclick = () => send('resume');
+  $('end-btn').onclick = () => send('end');
+  $('pause-btn').onclick = () => send('pause');
+  $('unpause-btn').onclick = () => send('unpause');
+
+  document.querySelectorAll('.snooze-btn[data-val]').forEach(b => {
+    b.addEventListener('click', e => {
+      const mins = parseInt(e.target.dataset.val);
+      send('snooze', { minutes: mins });
+      showToast(`Snoozed for ${mins} minutes`);
+    });
+  });
+
+  /* ---- Formatting helpers ---- */
+  function fmt(at) { return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+  function headlineFor(s) {
+    if (s.state === 'complete') return 'Session complete. Nice work! 🎉';
+    if (s.state === 're-alarm') return 'Come back to work.';
+    if (s.state === 'phone-fallback') return 'Phone-only focus — keep going.';
+    if (s.state === 'waiting-for-laptop') return 'Waiting for the laptop…';
+    if (s.state === 'monitoring') return 'Monitoring — stay with it.';
+    if (s.state === 'ringing') return 'Alarm!';
+    if (s.state === 'ended') return 'Session ended.';
+    return 'Your morning is queued.';
+  }
+
+  function detailFor(s, online) {
+    if (s.state === 'waiting-for-laptop') return `${s.waitingSecondsLeft ?? 600}s left to connect the laptop, then phone-only fallback starts.`;
+    if (s.state === 'monitoring') return online ? 'The laptop is validating your work.' : 'Laptop signal lost — reconnect the agent tab.';
+    if (s.state === 'phone-fallback') return 'Laptop unavailable. Phone-only mode: finish your target.';
+    if (s.state === 're-alarm') return s.reason === 'laptop-required'
+      ? 'Phone-only was used last time. The laptop is required today — connect it to continue.'
+      : 'Your work was not validated. Get back to the laptop within 5 minutes.';
+    if (s.state === 'complete') return `Result: ${s.mode}.`;
+    if (s.state === 'ended') return 'Session was ended early.';
+    return '';
+  }
+
+  /* ---- Render ---- */
+  function render() {
+    if (!current) return;
+    const s = current.state;
+    const online = current.laptopOnline;
+
+    // Laptop status
+    $('laptop-status').textContent = online ? 'connected' : 'offline';
+    $('laptop-status').className = online ? 'tag active' : 'tag error';
+    $('agent-url').textContent = current.agentUrl;
+
+    // Alarm info
+    if (s.target && s.alarmAt) {
+      $('alarm-info').textContent = `Alarm set for ${fmt(s.alarmAt)} — target: ${s.target} — ${s.durationMinutes || 30} min session`;
+    }
+
+    const inSession = s.target && s.state !== 'scheduled';
+    $('session-section').classList.toggle('hidden', !inSession);
+    $('setup-section').classList.toggle('hidden', inSession);
+
+    if (inSession) {
+      const dur = s.durationMinutes || 30;
+      $('session-state').textContent = s.state.replaceAll('-', ' ');
+      $('session-mode').textContent = s.mode || '';
+      $('session-mode').classList.toggle('hidden', !s.mode);
+      const pct = Math.min(100, (s.totalMinutes / dur) * 100);
+      $('progress-bar').style.width = pct + '%';
+      $('minutes-display').textContent = `${s.totalMinutes} / ${dur} min`;
+      $('remaining-display').textContent = `${s.remainingMinutes} min left`;
+      $('headline').textContent = headlineFor(s);
+      $('detail').textContent = detailFor(s, online);
+
+      // Pause / unpause buttons
+      const canPause = ['monitoring', 'phone-fallback', 'waiting-for-laptop'].includes(s.state) && !s.isPaused && s.pausesLeft > 0;
+      $('pause-btn').classList.toggle('hidden', !canPause);
+      $('unpause-btn').classList.toggle('hidden', !s.isPaused);
+      $('back-btn').classList.toggle('hidden', s.state !== 're-alarm');
+
+      // Pause info
+      if (s.isPaused || s.pausesLeft < 3) {
+        $('pause-info').classList.remove('hidden');
+        $('pause-info').textContent = s.isPaused
+          ? `Paused. ${s.pausesLeft} pauses remaining.`
+          : `${s.pausesLeft} pauses remaining.`;
+      } else {
+        $('pause-info').classList.add('hidden');
+      }
+    }
+
+    // Alarm overlay
+    const ringing = s.state === 'ringing';
+    $('alarm-overlay').classList.toggle('hidden', !ringing);
+    $('alarm-target').textContent = ringing ? s.target : '';
+    if (ringing) {
+      $('snooze-info').textContent = `${s.snoozesLeft ?? 3} snoozes remaining`;
+      startRing();
+    } else {
+      stopRing();
+    }
+  }
+
+  /* ---- API fetches ---- */
+  async function loadData() {
+    try {
+      const resStats = await fetch('/api/stats').catch(() => null);
+      if (resStats && resStats.ok) {
+        const stats = await resStats.json();
+        $('stat-streak').textContent = stats.streaks || 0;
+        $('stat-total').textContent = stats.totalSessions || 0;
+        $('stat-avg').textContent = Math.round(stats.averageSessionTime) || 0;
+      }
+
+      const resHist = await fetch('/api/history').catch(() => null);
+      if (resHist && resHist.ok) {
+        const history = await resHist.json();
+        const hl = $('history-list');
+        if (history.length === 0) {
+          hl.innerHTML = '<li class="history-item"><span>No sessions yet</span></li>';
+        } else {
+          hl.innerHTML = '';
+          history.slice(-7).reverse().forEach(h => {
+            const li = document.createElement('li');
+            li.className = 'history-item';
+            li.innerHTML = `<span>${new Date(h.timestamp).toLocaleDateString()} — ${h.target}</span><span>${h.duration}m · ${h.mode || 'n/a'}</span>`;
+            hl.appendChild(li);
+          });
+        }
+      }
+    } catch (e) {
+      console.log('Failed to load data', e);
+    }
+  }
+
+  connect();
+  loadData();
+  setInterval(loadData, 30000);
+  </script>
 </body>
 </html>
